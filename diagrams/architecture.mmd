@@ -1,19 +1,32 @@
-graph TD
-    subgraph AWS["AWS Cloud"]
-        DDB[(DynamoDB)]
-        Aurora[(Aurora)]
-        RDS[(RDS)]
-        EB[EventBridge]
-        ECS[ECS Fargate]
-        KMS[KMS]
-        SM[Secrets Manager]
+graph TB
+    subgraph Primary["Primary Region (us-east-1)"]
+        ALB_P[ALB] --> ECS_P[ECS Fargate<br/>App Service]
+        ECS_P --> AURORA_P[(Aurora MySQL<br/>Primary Cluster)]
+        ECS_P --> DYNAMO[DynamoDB<br/>Global Table]
+        AURORA_P --> GLOBAL_DB[Aurora<br/>Global Database]
+        
+        HC_LAMBDA[Health Check Lambda<br/>EventBridge every 1min] --> ALB_P
+        HC_LAMBDA --> AURORA_P
+        HC_LAMBDA --> SFN[Step Functions<br/>Failover State Machine]
+        
+        SFN --> FAILOVER_LAMBDA[Failover Lambda]
+        FAILOVER_LAMBDA --> R53[Route 53<br/>Weighted Routing]
+        FAILOVER_LAMBDA --> SNS[SNS<br/>Alert Topic]
     end
 
-    Lambda --> DDB
-    DDB --> Aurora
-    Aurora --> RDS
-    RDS --> EB
-    EB --> ECS
-    ECS --> KMS
-    KMS --> SM
-    Aurora -.->|metrics| CW[CloudWatch]
+    subgraph DR["DR Region (us-west-2)"]
+        GLOBAL_DB --> AURORA_DR[(Aurora MySQL<br/>DR Cluster)]
+        AURORA_DR --> ECS_DR[ECS Fargate<br/>DR Service - STOPPED]
+        ALB_DR[ALB - Standby] --> ECS_DR
+    end
+
+    subgraph Shared["Shared Services"]
+        KMS[KMS CMK<br/>Cross-Region] --> AURORA_P
+        KMS --> AURORA_DR
+        SECRETS[Secrets Manager<br/>DB Credentials] --> ECS_P
+        CW[CloudWatch Alarms<br/>Latency + Error Rate] --> SFN
+    end
+
+    R53 --> ALB_P
+    R53 -.->|After failover| ALB_DR
+    GLOBAL_DB -->|Sub-second<br/>replication| AURORA_DR
