@@ -1,9 +1,28 @@
 sequenceDiagram
-    User->>Lambda: Request
-    Lambda->>DDB: Request
-    DDB->>Aurora: Request
-    Aurora->>RDS: Request
-    RDS-->>Aurora: Response
-    Aurora-->>DDB: Response
-    DDB-->>Lambda: Response
-    Lambda-->>User: Response
+    participant EB as EventBridge<br/>(1min rule)
+    participant HC as Health Check Lambda
+    participant CW as CloudWatch
+    participant SFN as Step Functions
+    participant FL as Failover Lambda
+    participant AURORA_P as Aurora Primary
+    participant AURORA_DR as Aurora DR
+    participant R53 as Route 53
+    participant SNS as SNS Alert
+
+    EB->>HC: Trigger health check
+    HC->>AURORA_P: DescribeDBClusters
+    HC->>CW: Put health metric
+    
+    alt Primary Healthy
+        HC-->>CW: HealthStatus = 1
+    else Primary Unhealthy
+        HC-->>CW: HealthStatus = 0
+        CW->>SFN: Alarm → StartExecution
+        SFN->>FL: PromoteReadReplica
+        FL->>AURORA_DR: PromoteReadReplicaDBCluster
+        AURORA_DR-->>FL: Cluster promoted to Writer
+        FL->>R53: ChangeResourceRecordSets (flip DR)
+        FL->>AURORA_P: ModifyDBCluster (demote)
+        FL->>SNS: Publish failover notification
+        SNS-->>Ops: PagerDuty / Email alert
+    end
