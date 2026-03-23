@@ -1,5 +1,40 @@
-graph LR
-    Lambda --> DDB
-    DDB --> Aurora
-    Aurora --> RDS
-    RDS --> EB
+flowchart LR
+    subgraph Internet
+        User[User Traffic]
+        Ops[Operations Team]
+    end
+
+    subgraph VPC["VPC (3 AZs)"]
+        subgraph Public["Public Subnets"]
+            ALB[ALB<br/>SG: 443 inbound only]
+        end
+        subgraph Private["Private Subnets"]
+            ECS[ECS Fargate<br/>SG: ALB only]
+            LAMBDA[Lambda Functions<br/>SG: RDS + ALB]
+        end
+        subgraph Isolated["Isolated Subnets"]
+            AURORA[(Aurora MySQL<br/>SG: ECS + Lambda only)]
+        end
+    end
+
+    subgraph AWS_Services["VPC Endpoints - No NAT"]
+        S3EP[S3 Gateway]
+        DYNEP[DynamoDB Gateway]
+        SSMEP[SSM Interface]
+        SECREP[Secrets Manager]
+    end
+
+    subgraph Encryption["Encryption Layer"]
+        KMS[KMS CMK<br/>Custom Key]
+    end
+
+    User -->|HTTPS| ALB
+    Ops -->|Systems Manager| SSMEP
+    ALB --> ECS
+    ECS --> AURORA
+    ECS --> DYNEP
+    LAMBDA --> AURORA
+    ECS --> SECREP
+    KMS -.->|Encrypts| AURORA
+    KMS -.->|Encrypts| SECREP
+    ECS --> S3EP
